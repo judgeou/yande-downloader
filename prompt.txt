@@ -1,0 +1,21 @@
+有一个 http 接口：https://yande.re/post.json
+
+其中的参数可以是：
+
+limit: 每一页获取多少条记录，最大值 100
+page: 第几页
+
+返回的是一个 json 数组，数组的每一个成员都有一个 file_url 属性，他是图片的url地址
+
+请使用 nodejs 编写程序，需求：获取 300 条记录，并把记录里面的图片下载下来，以下是额外要求
+
+* 使用最新的 Javascript 语言特性
+* 引入库和模块必须使用 import 语法
+* 接口的请求必须使用 fetch 函数来完成
+
+* 使用 https-proxy-agent 库，使用 http://127.0.0.1:1092 作为请求的代理地址，记住每一个 fetch 请求都要使用代理
+* 灵活运用 async await 语法
+* 使用 fs.createWriteStream 进行图片下载，并且使用 await 来等待下载完成才执行下一步
+* 每一张图片的文件名使用 url 的最后一段，并且下载到 output 文件夹，如果这个文件夹不存在，要创建他
+
+直接给我代码就行

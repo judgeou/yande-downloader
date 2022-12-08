@@ -1,0 +1,10 @@
+{
+	"dependencies": {
+		"fs-extra": "^11.1.0",
+		"https-proxy-agent": "^5.0.1",
+		"node-fetch": "^3.3.0",
+		"promise-limit": "^2.7.0"
+	},
+	"main": "index.mjs",
+	"type": "module"
+}
