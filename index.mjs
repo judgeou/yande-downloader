@@ -14,7 +14,7 @@ const { http_proxy } = process.env
 const agent = http_proxy ? new HttpsProxyAgent(http_proxy) : null
 
 let outputDir = 'output'
-let tags = 'kamisato_ayaka rating:safe score:>1'
+let tags = 'torino_akua'
 let downlaodedCount = 0
 
 // Function to download an image from a given URL
@@ -33,7 +33,7 @@ const downloadImage = async (url, fileName) => {
 }
 
 // Function to get images from the JSON API and download them
-const getImages = async (limit, page) => {
+const getImages = async (limit, page, isDownloadSample) => {
   // Use fetch to send a GET request to the API endpoint
   const response = await fetch(`https://yande.re/post.json?tags=${tags}&limit=${limit}&page=${page}`, {agent});
   // Check if the request was successful
@@ -42,7 +42,8 @@ const getImages = async (limit, page) => {
     const json = await response.json();
 
     await Promise.all(json.map(image => {
-      return plimit(() => downloadImage(image.file_url, `${image.id}.${image.file_ext}`))
+      const downlaodUrl = isDownloadSample ? image.sample_url : image.file_url
+      return plimit(() => downloadImage(downlaodUrl, `${image.id}.${image.file_ext}`))
     }))
 
     return json
@@ -52,12 +53,12 @@ const getImages = async (limit, page) => {
 }
 
 // Main function
-const main = async () => {
+const main = async (isDownloadSample) => {
   await fs.ensureDir(outputDir)
   // Download the first 10 pages of images
   for (let i = 1; i <= 10; i++) {
     // Get and download the images for each page
-    let items = await getImages(100, i);
+    let items = await getImages(100, i, isDownloadSample);
 
     if (items.length === 0) {
       break
@@ -66,4 +67,4 @@ const main = async () => {
 }
 
 // Call the main function
-main();
+main(true);
