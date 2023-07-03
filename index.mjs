@@ -73,13 +73,44 @@ const getImages = async (tags, limit, page, isDownloadSample) => {
   }
 }
 
+const getImages_gelbooru = async (tags, limit, page) => {
+  const post_url = `https://gelbooru.com/index.php`
+  const fetch_url = `${post_url}?tags=${tags}&page=dapi&s=post&q=index&limit=${limit}&pid=${page}&json=1`
+  const response = await fetch(fetch_url);
+  // Check if the request was successful
+  if (response.ok) {
+    // Parse the response as JSON
+    const json = await response.json();
+    const { post } = json
+
+    await Promise.all(post.map(image => {
+      const downlaodUrl = image.file_url
+
+      if (downlaodUrl) {
+        const filePathInUrl = urlparse(downlaodUrl)
+        const file_ext = path.extname(filePathInUrl.pathname)
+
+        return plimit(() => downloadImage(downlaodUrl, `${image.id}${file_ext}`))
+      } else {
+        return false
+      }
+    }))
+
+    return post
+  } else {
+    const text = await response.text()
+    console.error(text)
+    return []
+  }
+}
+
 // Main function
-const main = async (tags, isDownloadSample) => {
+const main = async (tags, isDownloadSample, method = getImages) => {
   await fs.ensureDir(outputDir)
   // Download the first 10 pages of images
   for (let i of [1]) {
     // Get and download the images for each page
-    let items = await getImages(tags, 100, i, isDownloadSample);
+    let items = await method(tags, 100, i, isDownloadSample);
 
     if (items.length === 0) {
       break
@@ -105,7 +136,7 @@ async function download_popular_by_month (month, year, isDownloadSample) {
   }
 }
 
-outputDir = 'output/chen_bin'
+outputDir = 'output/enuni'
 // Call the main function
-main('chen_bin', true);
+main('enuni', true, getImages_gelbooru);
 // download_popular_by_month(2, 2023, true)
