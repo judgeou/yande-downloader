@@ -4,7 +4,10 @@
 		"https-proxy-agent": "^5.0.1",
 		"node-fetch": "^3.3.0",
 		"node-global-proxy": "^1.0.1",
-		"promise-limit": "^2.7.0"
+		"node-html-parser": "^6.1.5",
+		"promise-limit": "^2.7.0",
+		"puppeteer": "^20.8.1",
+		"socks-proxy-agent": "^8.0.1"
 	},
 	"main": "index.mjs",
 	"type": "module"

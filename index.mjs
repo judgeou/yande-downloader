@@ -9,7 +9,7 @@ import promiseLimit from 'promise-limit'
 import proxy from 'node-global-proxy'
 
 const streamPipeline = promisify(pipeline)
-const plimit = promiseLimit(3)
+const plimit = promiseLimit(8)
 const POST_URL = `https://danbooru.donmai.us/posts.json`
 // const POST_URL = `https://yande.re/post.json`
 // const POST_URL = `https://konachan.com/post.json`
@@ -22,11 +22,52 @@ proxy.default.start()
 
 let outputDir = 'output'
 let downlaodedCount = 0
+let downloadedMap = new Map()
+const maxDownload = 150
+
+async function fetchWithTimeout(url, options, timeout = 10000) {
+  while (1) {
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), timeout);
+      const result = await fetch(url, { signal: controller.signal, ...options });
+      clearTimeout(timeoutId)
+      return result
+    } catch {
+      console.log(`retry ${url}`)
+      continue
+    }
+  }
+}
 
 // Function to download an image from a given URL
 const downloadImage = async (url, fileName) => {
+  if (downlaodedCount >= maxDownload) {
+    return false
+  }
   // Use fetch to send a GET request to the URL
-  const response = await fetch(url);
+  const options = {
+    method: 'GET',
+    "headers": {
+      "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+      'Accept-Encoding': 'gzip, deflate, br',
+      "accept-language": "zh-CN,zh;q=0.9,en;q=0.8",
+      'Cache-Control': 'no-cache, no-store, must-revalidate',
+      'Pragma': 'no-cache',
+      'Expires': '0',
+      'Referer': 'https://gelbooru.com/',
+      "sec-ch-ua": "\"Not.A/Brand\";v=\"8\", \"Chromium\";v=\"114\", \"Google Chrome\";v=\"114\"",
+      "sec-ch-ua-mobile": "?0",
+      "sec-ch-ua-platform": "\"Windows\"",
+      "sec-fetch-dest": "document",
+      "sec-fetch-mode": "navigate",
+      "sec-fetch-site": "same-site",
+      "sec-fetch-user": "?1",
+      "upgrade-insecure-requests": "1",
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36'
+    }
+  }
+  const response = await fetchWithTimeout(url, options);
   // Check if the request was successful
   if (response.ok) {
     // Create a write stream to save the image to a file
@@ -34,7 +75,10 @@ const downloadImage = async (url, fileName) => {
     // Pipe the response stream into the write stream
     await streamPipeline(response.body, fileStream)
     downlaodedCount++
-    console.log(`download: ${downlaodedCount}`)
+    console.log(`done: ${downlaodedCount} ${url}`)
+    return true
+  } else {
+    return false
   }
 }
 
@@ -90,11 +134,20 @@ const getImages_gelbooru = async (tags, limit, page) => {
         const filePathInUrl = urlparse(downlaodUrl)
         const file_ext = path.extname(filePathInUrl.pathname)
 
-        return plimit(() => downloadImage(downlaodUrl, `${image.id}${file_ext}`))
+        downloadedMap.set(image.id, { id: image.id, url: downlaodUrl, complete: false })
+
+        return plimit(async () => {
+          const result = await downloadImage(downlaodUrl, `${image.id}${file_ext}`)
+          const info = downloadedMap.get(image.id)
+          info.complete = result
+          return result
+        })
       } else {
         return false
       }
     }))
+
+    console.log(downloadedMap)
 
     return post
   } else {
@@ -108,7 +161,7 @@ const getImages_gelbooru = async (tags, limit, page) => {
 const main = async (tags, isDownloadSample, method = getImages) => {
   await fs.ensureDir(outputDir)
   // Download the first 10 pages of images
-  for (let i of [1]) {
+  for (let i of [0,1]) {
     // Get and download the images for each page
     let items = await method(tags, 100, i, isDownloadSample);
 
@@ -136,7 +189,7 @@ async function download_popular_by_month (month, year, isDownloadSample) {
   }
 }
 
-outputDir = 'output/enuni'
+outputDir = 'output/devil_heavens'
 // Call the main function
-main('enuni', true, getImages_gelbooru);
+main('devil_heavens ', true, getImages_gelbooru);
 // download_popular_by_month(2, 2023, true)
