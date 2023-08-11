@@ -9,7 +9,7 @@ import promiseLimit from 'promise-limit'
 import proxy from 'node-global-proxy'
 
 const streamPipeline = promisify(pipeline)
-const plimit = promiseLimit(8)
+const plimit = promiseLimit(2)
 const POST_URL = `https://danbooru.donmai.us/posts.json`
 // const POST_URL = `https://yande.re/post.json`
 // const POST_URL = `https://konachan.com/post.json`
@@ -19,6 +19,25 @@ proxy.default.setConfig({
   https: process.env.https_proxy
 })
 proxy.default.start()
+
+const baseHeaders = {
+  "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+  'Accept-Encoding': 'gzip, deflate, br',
+  "accept-language": "zh-CN,zh;q=0.9,en;q=0.8",
+  'Cache-Control': 'no-cache, no-store, must-revalidate',
+  'Pragma': 'no-cache',
+  'Expires': '0',
+  'Referer': 'https://gelbooru.com/',
+  "sec-ch-ua": "\"Not.A/Brand\";v=\"8\", \"Chromium\";v=\"114\", \"Google Chrome\";v=\"114\"",
+  "sec-ch-ua-mobile": "?0",
+  "sec-ch-ua-platform": "\"Windows\"",
+  "sec-fetch-dest": "document",
+  "sec-fetch-mode": "navigate",
+  "sec-fetch-site": "same-site",
+  "sec-fetch-user": "?1",
+  "upgrade-insecure-requests": "1",
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36'
+}
 
 let outputDir = 'output'
 let downlaodedCount = 0
@@ -40,46 +59,91 @@ async function fetchWithTimeout(url, options, timeout = 10000) {
   }
 }
 
+async function bodyToBuffer (body) {
+  return new Promise((resolve, reject) => {
+    let chunks = []
+    body.on('data', (chunk) => {
+      chunks.push(chunk)
+    })
+    body.on('end', () => {
+      resolve(Buffer.concat(chunks))
+    })
+    body.on('error', (err) => {
+      reject(err)
+    })
+  })
+}
+
+async function fetchHead (url) {
+  const options = {
+    method: 'HEAD',
+    "headers": baseHeaders
+  }
+  const response = await fetch(url, options)
+  return response.headers
+}
+
+async function downloadFilePart (url, startByte, endByte) {
+  const headers = {
+    'Range': `bytes=${startByte}-${endByte}`
+  }
+
+  const response = await fetch(url, { headers: {...baseHeaders, ...headers} })
+  return bodyToBuffer(response.body)
+}
+
+async function downloadFileManyPart (url, numParts) {
+  const responseHead = await fetchHead(url)
+  const contentLength = Number(responseHead.get('content-length'))
+  
+  if (contentLength) {
+    const partSize = Math.ceil(contentLength / numParts)
+    const partPromises = []
+
+    for (let i = 0; i < numParts; i++) {
+      const startByte = i * partSize
+      const endByte = (i + 1) === numParts ? contentLength - 1 : (i + 1) * partSize - 1
+      partPromises.push(downloadFilePart(url, startByte, endByte))
+    }
+
+    const downloadedParts = await Promise.all(partPromises)
+    const downloadedFile = Buffer.concat(downloadedParts)
+    return downloadedFile
+  }
+}
+
 // Function to download an image from a given URL
 const downloadImage = async (url, fileName) => {
   if (downlaodedCount >= maxDownload) {
     return false
   }
-  // Use fetch to send a GET request to the URL
-  const options = {
-    method: 'GET',
-    "headers": {
-      "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
-      'Accept-Encoding': 'gzip, deflate, br',
-      "accept-language": "zh-CN,zh;q=0.9,en;q=0.8",
-      'Cache-Control': 'no-cache, no-store, must-revalidate',
-      'Pragma': 'no-cache',
-      'Expires': '0',
-      'Referer': 'https://gelbooru.com/',
-      "sec-ch-ua": "\"Not.A/Brand\";v=\"8\", \"Chromium\";v=\"114\", \"Google Chrome\";v=\"114\"",
-      "sec-ch-ua-mobile": "?0",
-      "sec-ch-ua-platform": "\"Windows\"",
-      "sec-fetch-dest": "document",
-      "sec-fetch-mode": "navigate",
-      "sec-fetch-site": "same-site",
-      "sec-fetch-user": "?1",
-      "upgrade-insecure-requests": "1",
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36'
-    }
-  }
-  const response = await fetchWithTimeout(url, options);
-  // Check if the request was successful
-  if (response.ok) {
-    // Create a write stream to save the image to a file
-    const fileStream = fs.createWriteStream(path.resolve(outputDir, fileName));
-    // Pipe the response stream into the write stream
-    await streamPipeline(response.body, fileStream)
+  try {
+    const buffer = await downloadFileManyPart(url, 4)
+    await fs.writeFile(path.resolve(outputDir, fileName), buffer)
     downlaodedCount++
     console.log(`done: ${downlaodedCount} ${url}`)
     return true
-  } else {
+  } catch {
     return false
   }
+  // Use fetch to send a GET request to the URL
+  // const options = {
+  //   method: 'GET',
+  //   "headers": baseHeaders
+  // }
+  // const response = await fetchWithTimeout(url, options);
+  // // Check if the request was successful
+  // if (response.ok) {
+  //   // Create a write stream to save the image to a file
+  //   const fileStream = fs.createWriteStream(path.resolve(outputDir, fileName));
+  //   // Pipe the response stream into the write stream
+  //   await streamPipeline(response.body, fileStream)
+  //   downlaodedCount++
+  //   console.log(`done: ${downlaodedCount} ${url}`)
+  //   return true
+  // } else {
+  //   return false
+  // }
 }
 
 async function downloadTags (tag_string, fileName) {
@@ -126,26 +190,28 @@ const getImages_gelbooru = async (tags, limit, page) => {
     // Parse the response as JSON
     const json = await response.json();
     const { post } = json
+    let tasks = []
 
-    await Promise.all(post.map(image => {
-      const downlaodUrl = image.file_url
+    for (let image of post) {
+      const task = plimit(async () => {
+        const downlaodUrl = image.file_url
 
-      if (downlaodUrl) {
-        const filePathInUrl = urlparse(downlaodUrl)
-        const file_ext = path.extname(filePathInUrl.pathname)
-
-        downloadedMap.set(image.id, { id: image.id, url: downlaodUrl, complete: false })
-
-        return plimit(async () => {
+        if (downlaodUrl) {
+          const filePathInUrl = urlparse(downlaodUrl)
+          const file_ext = path.extname(filePathInUrl.pathname)
+  
+          downloadedMap.set(image.id, { id: image.id, url: downlaodUrl, complete: false })
+  
           const result = await downloadImage(downlaodUrl, `${image.id}${file_ext}`)
           const info = downloadedMap.get(image.id)
           info.complete = result
-          return result
-        })
-      } else {
-        return false
-      }
-    }))
+        }
+      })
+
+      tasks.push(task)
+    }
+
+    await Promise.all(tasks)
 
     console.log(downloadedMap)
 
@@ -191,5 +257,5 @@ async function download_popular_by_month (month, year, isDownloadSample) {
 
 outputDir = 'output/devil_heavens'
 // Call the main function
-main('devil_heavens ', true, getImages_gelbooru);
+main('panties_under_pantyhose -rating:e -rating:q', true, getImages_gelbooru);
 // download_popular_by_month(2, 2023, true)

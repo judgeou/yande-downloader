@@ -13,8 +13,8 @@
       ],
       "program": "${file}",
       "env": {
-        "http_proxy": "http://127.0.0.1:1081",
-        "https_proxy": "http://127.0.0.1:1081"
+        "http_proxy": "http://127.0.0.1:1092",
+        "https_proxy": "http://127.0.0.1:1092"
       }
     }, {
       "type": "node",
