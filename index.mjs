@@ -1,30 +1,29 @@
 // Import required modules
-import fetch from 'node-fetch';
 import fs from 'fs-extra';
 import path from 'path'
 import { parse as urlparse } from 'url'
 import { pipeline } from 'node:stream'
 import { promisify } from 'node:util'
 import promiseLimit from 'promise-limit'
-import proxy from 'node-global-proxy'
+import https from 'https'
 
 const streamPipeline = promisify(pipeline)
-const plimit = promiseLimit(2)
+const plimit = promiseLimit(4)
 const POST_URL = `https://danbooru.donmai.us/posts.json`
 // const POST_URL = `https://yande.re/post.json`
 // const POST_URL = `https://konachan.com/post.json`
 
-proxy.default.setConfig({
-  http: process.env.http_proxy,
-  https: process.env.https_proxy
-})
-proxy.default.start()
+// proxy.default.setConfig({
+//   http: process.env.http_proxy,
+//   https: process.env.https_proxy
+// })
+// proxy.default.start()
 
 const baseHeaders = {
   "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
   'Accept-Encoding': 'gzip, deflate, br',
   "accept-language": "zh-CN,zh;q=0.9,en;q=0.8",
-  'Cache-Control': 'no-cache, no-store, must-revalidate',
+  'Cache-Control': 'no-cache',
   'Pragma': 'no-cache',
   'Expires': '0',
   'Referer': 'https://gelbooru.com/',
@@ -42,20 +41,52 @@ const baseHeaders = {
 let outputDir = 'output'
 let downlaodedCount = 0
 let downloadedMap = new Map()
-const maxDownload = 150
 
-async function fetchWithTimeout(url, options, timeout = 10000) {
-  while (1) {
-    try {
+async function fetchWithTimeout(url, options, timeout = 3000) {
+  return new Promise((resolve, reject) => {
+    let isDone = false
+
+    fn1 = () => {
+      if (isDone) {
+        return
+      }
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), timeout);
-      const result = await fetch(url, { signal: controller.signal, ...options });
-      clearTimeout(timeoutId)
-      return result
-    } catch {
-      console.log(`retry ${url}`)
-      continue
+      const response = fetch(url, { signal: controller.signal, ...options });
+      response.then(res => {
+        const result = bodyToBuffer(res.body)
+        isDone = true
+        resolve(result)
+      })
+
+      setTimeout(() => {
+        controller.abort()
+        fn1()
+      }, timeout)
     }
+
+    fn1()
+  })
+}
+
+async function fetchWithNothing (url, options) {
+  const response = await fetch(url, { signal: controller.signal, ...options });
+  return bodyToBuffer(response.body)
+}
+
+function fetchReturnController (url) {
+  const controller = new AbortController();
+  const response = fetch(url, { signal: controller.signal, headers: baseHeaders });
+
+  const bufferPromise = new Promise((resolve, reject) => {
+    response.then(async res =>{
+      const buffer = await bodyToBuffer(res.body)
+      resolve(buffer)
+    }).catch(() => {})
+  })
+  
+  return {
+    controller,
+    bufferPromise
   }
 }
 
@@ -88,8 +119,9 @@ async function downloadFilePart (url, startByte, endByte) {
     'Range': `bytes=${startByte}-${endByte}`
   }
 
-  const response = await fetch(url, { headers: {...baseHeaders, ...headers} })
-  return bodyToBuffer(response.body)
+  const buffer = await fetchWithNothing(url, { headers: {...baseHeaders, ...headers} })
+  console.log(`done part ${startByte}-${endByte}`)
+  return buffer
 }
 
 async function downloadFileManyPart (url, numParts) {
@@ -102,24 +134,53 @@ async function downloadFileManyPart (url, numParts) {
 
     for (let i = 0; i < numParts; i++) {
       const startByte = i * partSize
-      const endByte = (i + 1) === numParts ? contentLength - 1 : (i + 1) * partSize - 1
+      const endByte = (i + 1) === numParts ? contentLength : (i + 1) * partSize
       partPromises.push(downloadFilePart(url, startByte, endByte))
     }
 
     const downloadedParts = await Promise.all(partPromises)
     const downloadedFile = Buffer.concat(downloadedParts)
     return downloadedFile
+  } else {
+    return Buffer.from([])
   }
 }
 
+function getJSONHttp (url) {
+  return new Promise((resolve, reject) => {
+    https.get(url, res => {
+      let data = ''
+
+      res.on('data', chunk => { data += chunk })
+      res.on('end', () => {
+        let json = JSON.parse(data)
+        resolve(json)
+      })
+    })
+  })
+}
+
+function downloadFileHttp (url, filepath) {
+  return new Promise((resolve, reject) => {
+    const req = https.get(url, res => {
+      streamPipeline(res, fs.createWriteStream(filepath)).then(resolve)
+    })
+
+    req.setTimeout(3000)
+    req.on('timeout', () => {
+      console.log(`timeout: ${url}`)
+      downloadFileHttp(url, filepath).then(resolve)
+    })
+  })
+}
+
 // Function to download an image from a given URL
-const downloadImage = async (url, fileName) => {
+const downloadImage = async (url, fileName, maxDownload) => {
   if (downlaodedCount >= maxDownload) {
     return false
   }
   try {
-    const buffer = await downloadFileManyPart(url, 4)
-    await fs.writeFile(path.resolve(outputDir, fileName), buffer)
+    await downloadFileHttp(url, path.resolve(outputDir, fileName))
     downlaodedCount++
     console.log(`done: ${downlaodedCount} ${url}`)
     return true
@@ -181,14 +242,13 @@ const getImages = async (tags, limit, page, isDownloadSample) => {
   }
 }
 
-const getImages_gelbooru = async (tags, limit, page) => {
+const getImages_gelbooru = async (tags, limit, page, isDownloadSample, maxDownload) => {
   const post_url = `https://gelbooru.com/index.php`
-  const fetch_url = `${post_url}?tags=${tags}&page=dapi&s=post&q=index&limit=${limit}&pid=${page}&json=1`
-  const response = await fetch(fetch_url);
+  const fetch_url = `${post_url}?tags=${encodeURIComponent(tags)}&page=dapi&s=post&q=index&limit=${limit}&pid=${page}&json=1`
+  const json = await getJSONHttp(fetch_url);
   // Check if the request was successful
-  if (response.ok) {
+  if (json) {
     // Parse the response as JSON
-    const json = await response.json();
     const { post } = json
     let tasks = []
 
@@ -202,7 +262,7 @@ const getImages_gelbooru = async (tags, limit, page) => {
   
           downloadedMap.set(image.id, { id: image.id, url: downlaodUrl, complete: false })
   
-          const result = await downloadImage(downlaodUrl, `${image.id}${file_ext}`)
+          const result = await downloadImage(downlaodUrl, `${image.id}${file_ext}`, maxDownload)
           const info = downloadedMap.get(image.id)
           info.complete = result
         }
@@ -224,12 +284,12 @@ const getImages_gelbooru = async (tags, limit, page) => {
 }
 
 // Main function
-const main = async (tags, isDownloadSample, method = getImages) => {
+const main = async (tags, isDownloadSample, method = getImages, maxDownload = 100) => {
   await fs.ensureDir(outputDir)
   // Download the first 10 pages of images
-  for (let i of [0,1]) {
+  for (let i of [0]) {
     // Get and download the images for each page
-    let items = await method(tags, 100, i, isDownloadSample);
+    let items = await method(tags, 100, i, isDownloadSample, maxDownload);
 
     if (items.length === 0) {
       break
@@ -255,7 +315,7 @@ async function download_popular_by_month (month, year, isDownloadSample) {
   }
 }
 
-outputDir = 'output/devil_heavens'
+outputDir = 'output/eula_(genshin_impact)'
 // Call the main function
-main('panties_under_pantyhose -rating:e -rating:q', true, getImages_gelbooru);
+main('eula_(genshin_impact) school_uniform solo -rating:e -rating:q sort:score', true, getImages_gelbooru, 30);
 // download_popular_by_month(2, 2023, true)
