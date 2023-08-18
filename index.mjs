@@ -6,6 +6,11 @@ import { pipeline } from 'node:stream'
 import { promisify } from 'node:util'
 import promiseLimit from 'promise-limit'
 import https from 'https'
+import { SocksProxyAgent } from 'socks-proxy-agent'
+
+const agent = new SocksProxyAgent(
+  'socks://127.0.0.1:4321'
+)
 
 const streamPipeline = promisify(pipeline)
 const plimit = promiseLimit(4)
@@ -42,113 +47,9 @@ let outputDir = 'output'
 let downlaodedCount = 0
 let downloadedMap = new Map()
 
-async function fetchWithTimeout(url, options, timeout = 3000) {
-  return new Promise((resolve, reject) => {
-    let isDone = false
-
-    fn1 = () => {
-      if (isDone) {
-        return
-      }
-      const controller = new AbortController();
-      const response = fetch(url, { signal: controller.signal, ...options });
-      response.then(res => {
-        const result = bodyToBuffer(res.body)
-        isDone = true
-        resolve(result)
-      })
-
-      setTimeout(() => {
-        controller.abort()
-        fn1()
-      }, timeout)
-    }
-
-    fn1()
-  })
-}
-
-async function fetchWithNothing (url, options) {
-  const response = await fetch(url, { signal: controller.signal, ...options });
-  return bodyToBuffer(response.body)
-}
-
-function fetchReturnController (url) {
-  const controller = new AbortController();
-  const response = fetch(url, { signal: controller.signal, headers: baseHeaders });
-
-  const bufferPromise = new Promise((resolve, reject) => {
-    response.then(async res =>{
-      const buffer = await bodyToBuffer(res.body)
-      resolve(buffer)
-    }).catch(() => {})
-  })
-  
-  return {
-    controller,
-    bufferPromise
-  }
-}
-
-async function bodyToBuffer (body) {
-  return new Promise((resolve, reject) => {
-    let chunks = []
-    body.on('data', (chunk) => {
-      chunks.push(chunk)
-    })
-    body.on('end', () => {
-      resolve(Buffer.concat(chunks))
-    })
-    body.on('error', (err) => {
-      reject(err)
-    })
-  })
-}
-
-async function fetchHead (url) {
-  const options = {
-    method: 'HEAD',
-    "headers": baseHeaders
-  }
-  const response = await fetch(url, options)
-  return response.headers
-}
-
-async function downloadFilePart (url, startByte, endByte) {
-  const headers = {
-    'Range': `bytes=${startByte}-${endByte}`
-  }
-
-  const buffer = await fetchWithNothing(url, { headers: {...baseHeaders, ...headers} })
-  console.log(`done part ${startByte}-${endByte}`)
-  return buffer
-}
-
-async function downloadFileManyPart (url, numParts) {
-  const responseHead = await fetchHead(url)
-  const contentLength = Number(responseHead.get('content-length'))
-  
-  if (contentLength) {
-    const partSize = Math.ceil(contentLength / numParts)
-    const partPromises = []
-
-    for (let i = 0; i < numParts; i++) {
-      const startByte = i * partSize
-      const endByte = (i + 1) === numParts ? contentLength : (i + 1) * partSize
-      partPromises.push(downloadFilePart(url, startByte, endByte))
-    }
-
-    const downloadedParts = await Promise.all(partPromises)
-    const downloadedFile = Buffer.concat(downloadedParts)
-    return downloadedFile
-  } else {
-    return Buffer.from([])
-  }
-}
-
 function getJSONHttp (url) {
   return new Promise((resolve, reject) => {
-    https.get(url, res => {
+    https.get(url, { agent }, res => {
       let data = ''
 
       res.on('data', chunk => { data += chunk })
@@ -162,7 +63,7 @@ function getJSONHttp (url) {
 
 function downloadFileHttp (url, filepath) {
   return new Promise((resolve, reject) => {
-    const req = https.get(url, res => {
+    const req = https.get(url, { agent}, res => {
       streamPipeline(res, fs.createWriteStream(filepath)).then(resolve)
     })
 
@@ -287,7 +188,7 @@ const getImages_gelbooru = async (tags, limit, page, isDownloadSample, maxDownlo
 const main = async (tags, isDownloadSample, method = getImages, maxDownload = 100) => {
   await fs.ensureDir(outputDir)
   // Download the first 10 pages of images
-  for (let i of [0]) {
+  for (let i of [0,1]) {
     // Get and download the images for each page
     let items = await method(tags, 100, i, isDownloadSample, maxDownload);
 
@@ -297,25 +198,8 @@ const main = async (tags, isDownloadSample, method = getImages, maxDownload = 10
   }
 }
 
-async function download_popular_by_month (month, year, isDownloadSample) {
-  const response = await fetch(`https://${TARGET_HOST}/post/popular_by_month.json?month=${month}&year=${year}`)
+outputDir = 'output/harimoji'
 
-  if (response.ok) {
-    // Parse the response as JSON
-    const json = await response.json();
-
-    await Promise.all(json.map(image => {
-      const downlaodUrl = isDownloadSample ? image.sample_url : image.file_url
-      return plimit(() => downloadImage(downlaodUrl, `${image.id}.${image.file_ext}`))
-    }))
-
-    return json
-  } else {
-    return []
-  }
-}
-
-outputDir = 'output/eula_(genshin_impact)'
 // Call the main function
-main('eula_(genshin_impact) school_uniform solo -rating:e -rating:q sort:score', true, getImages_gelbooru, 30);
+main('harimoji', true, getImages_gelbooru, 150);
 // download_popular_by_month(2, 2023, true)
