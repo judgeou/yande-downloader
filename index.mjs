@@ -63,13 +63,17 @@ function getJSONHttp (url) {
 
 function downloadFileHttp (url, filepath) {
   return new Promise((resolve, reject) => {
-    const req = https.get(url, { agent}, res => {
+    const req = https.get(url, { agent }, res => {
       streamPipeline(res, fs.createWriteStream(filepath)).then(resolve)
     })
 
     req.setTimeout(3000)
     req.on('timeout', () => {
       console.log(`timeout: ${url}`)
+      downloadFileHttp(url, filepath).then(resolve)
+    })
+    req.on('error', () => {
+      console.log(`error: ${url}`)
       downloadFileHttp(url, filepath).then(resolve)
     })
   })
@@ -184,11 +188,52 @@ const getImages_gelbooru = async (tags, limit, page, isDownloadSample, maxDownlo
   }
 }
 
+const getImages_yande = async (tags, limit, page, isDownloadSample, maxDownload) => {
+  const post_url = `https://yande.re/post.json`
+  const fetch_url = `${post_url}?tags=${encodeURIComponent(tags)}&page=${page + 1}&limit=${limit}`
+  const json = await getJSONHttp(fetch_url);
+  // Check if the request was successful
+  if (json) {
+    // Parse the response as JSON
+    const post = json
+    let tasks = []
+
+    for (let image of post) {
+      const task = plimit(async () => {
+        const downlaodUrl = image.file_url
+
+        if (downlaodUrl) {
+          const filePathInUrl = urlparse(downlaodUrl)
+          const file_ext = path.extname(filePathInUrl.pathname)
+  
+          downloadedMap.set(image.id, { id: image.id, url: downlaodUrl, complete: false })
+  
+          const result = await downloadImage(downlaodUrl, `${image.id}${file_ext}`, maxDownload)
+          const info = downloadedMap.get(image.id)
+          info.complete = result
+        }
+      })
+
+      tasks.push(task)
+    }
+
+    await Promise.all(tasks)
+
+    console.log(downloadedMap)
+
+    return post
+  } else {
+    const text = await response.text()
+    console.error(text)
+    return []
+  }
+}
+
 // Main function
 const main = async (tags, isDownloadSample, method = getImages, maxDownload = 100) => {
   await fs.ensureDir(outputDir)
   // Download the first 10 pages of images
-  for (let i of [0,1]) {
+  for (let i of [0]) {
     // Get and download the images for each page
     let items = await method(tags, 100, i, isDownloadSample, maxDownload);
 
@@ -198,8 +243,8 @@ const main = async (tags, isDownloadSample, method = getImages, maxDownload = 10
   }
 }
 
-outputDir = 'output/harimoji'
+outputDir = 'output/akamoku'
 
 // Call the main function
-main('harimoji', true, getImages_gelbooru, 150);
+main('akamoku', true, getImages_gelbooru, 100);
 // download_popular_by_month(2, 2023, true)

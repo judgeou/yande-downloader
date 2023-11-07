@@ -7,7 +7,15 @@ import promiseLimit from 'promise-limit'
 import https from 'https'
 import { SocksProxyAgent } from 'socks-proxy-agent'
 
+const streamPipeline = promisify(pipeline)
 const agent = new SocksProxyAgent('socks://127.0.0.1:4321')
+const base_headers = {
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36',
+  "cookie": "cloudreve-session=MTY5MjM2OTM2N3xOd3dBTkZCRVJqUlNXRE0wVjBKVVdWRkJVbGRLVjAxRFFVTkRRekpHUmxOUlRsQk9TRXRUTkZGUk0xSlBORU5CUTBGV1RGUTBOVkU9fNg8cFBS6uczcArlsAG-Ydv7wyZgBWftRcIBkqfecAUE"
+}
+const PART_SIZE = 2 * 1024 * 1024
+const plimit = promiseLimit(16)
+const download_dir = './sakuradrive'
 
 function extract_url (url) {
   const parsed = new URL(url)
@@ -17,7 +25,20 @@ function extract_url (url) {
   }
 }
 
-async function request_text (url, { headers = {} } =  {}) {
+function extract_filename (content_disposition) {
+  const input = content_disposition;
+  const regex = /filename="([^"]+)"/;
+  const match = input.match(regex);
+
+  if (match && match[1]) {
+    const filename = match[1];
+    return filename
+  } else {
+    return null
+  }
+}
+
+async function request_response (url, options, headers = {}) {
   return new Promise((resolve, reject) => {
     const hp = extract_url(url)
 
@@ -26,33 +47,87 @@ async function request_text (url, { headers = {} } =  {}) {
       path: hp.path,
       method: 'GET',
       agent,
-      headers,
-      minVersion: 'TLSv1.2'
-    }, res => {
-      let recv_buffer = Buffer.alloc(0)
-
-      res.on('data', data => {
-        recv_buffer = Buffer.concat([recv_buffer, data])
-      })
-
-      res.on('end', () => {
-        resolve(recv_buffer.toString('utf-8'))
-      })
-    })
+      headers: {...base_headers, ...headers},
+      minVersion: 'TLSv1.2',
+      ...options
+    }, resolve)
     
-    req.on('error', err => {
-      reject(err)
-    })
-    
+    req.on('error', reject)
+
     req.end()
   })
 }
 
-const download_url = `https://s1.cdndrive.uk/api/v3/slave/download/0/dXBsb2Fkcy8yMDIzLzA4LzE3L3Q0Y1NxekZNX2tjLjd6/kc.7z?sign=mvsRZJaKo3fjaI-SzFK4s_g2aHNNwGooT7iSjUjg4zY%3D%3A1692331568`
+async function request_text (url, options = {}) {
+  return new Promise(async (resolve, reject) => {
+    const response = await request_response(url, options)
+    let recv_buffer = Buffer.alloc(0)
 
-request_text('https://tls.browserleaks.com/tls').then(json => {
+    response.on('data', data => {
+      recv_buffer = Buffer.concat([recv_buffer, data])
+    })
+
+    response.on('end', () => {
+      resolve(recv_buffer.toString('utf-8'))
+    })
+  })
+}
+
+async function request_content_length (url) {
+  const res = await request_response(url, {
+    method: 'GET'
+  })
+
+  const content_length = res.headers['content-length']
+  const content_disposition = res.headers['content-disposition']
+  const filename = extract_filename(content_disposition)
+
+  res.destroy()
+
+  return { content_length, filename }
+}
+
+async function merge_filepart (filename, fileparts = []) {
+
+}
+
+async function download_part (url, filename, start, end, serial_number) {
+  console.log({url, filename, start, end, serial_number})
+  const output_path = path.join(download_dir, `${filename}-part${serial_number}`)
+  const writer = fs.createWriteStream(output_path)
+
+  const res = await request_response(url, {}, {
+    'Range': `bytes=${start}-${end}`,
+    "Referrer-Policy": "strict-origin-when-cross-origin",
+    "Referer": "https://sakuradrive.com/s/b4Nh4",
+  })
+
+  return streamPipeline(res, writer)
+}
+
+request_text(`https://sakuradrive.com/api/v3/share/download/b4Nh4?path=undefined%2Fundefined`, {
+  method: 'PUT'
+}).then(async json => {
   const obj = JSON.parse(json)
-  console.log(obj)
+  const file_url = obj.data
+  
+  const { content_length, filename } = await request_content_length(file_url)
+  const total_size = Number(content_length)
+  let serial_number = 1
+  const tasks = []
+
+  for (let current_size = 0; current_size < total_size; ) {
+    const sn = serial_number
+    const start = current_size
+    const end = Math.min(start + PART_SIZE, total_size)
+    const task = plimit(async () => download_part(file_url, filename, start, end, sn))
+    tasks.push(task)
+    serial_number++
+    current_size = end
+  }
+
+  await Promise.all(tasks)
+
 })
 
 const aaa = `
